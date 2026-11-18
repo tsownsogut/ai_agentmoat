@@ -47,15 +47,25 @@ def parse_financial_data(data_string):
             data[key] = value
     return data
 
-def format_large_number(value_str):
+# [FIXED] Nhận thêm `prefix` (đơn vị tiền tệ) thay vì cố định ký hiệu "$"
+def format_large_number(value_str, prefix="$"):
     if value_str is None or value_str == "N/A": return "N/A"
     try:
         num = float(value_str)
-        if num >= 1_000_000_000_000: return f"${num / 1_000_000_000_000:.2f}T"
-        if num >= 1_000_000_000: return f"${num / 1_000_000_000:.2f}B"
-        if num >= 1_000_000: return f"${num / 1_000_000:.2f}M"
-        return f"${num:,.2f}"
+        if num >= 1_000_000_000_000: return f"{prefix}{num / 1_000_000_000_000:.2f}T"
+        if num >= 1_000_000_000: return f"{prefix}{num / 1_000_000_000:.2f}B"
+        if num >= 1_000_000: return f"{prefix}{num / 1_000_000:.2f}M"
+        return f"{prefix}{num:,.2f}"
     except (ValueError, TypeError): return "N/A"
+
+# [FIXED] USD -> "$"; mã khác (JPY, KRW...) -> "JPY "; thiếu/N/A -> "Currency unknown "
+def get_currency_prefix(currency):
+    code = str(currency).strip().upper() if currency is not None else ""
+    if code in ("", "N/A", "NONE"):
+        return "Currency unknown "
+    if code == "USD":
+        return "$"
+    return f"{code} "
 
 def get_first_available_value(data_dict, keys_to_try):
     for key in keys_to_try:
@@ -122,9 +132,9 @@ def run_full_analysis(company_name, stock_ticker):
             if financial_data_str.startswith("Error"):
                 st.warning(f"Could not retrieve complete financial data for {stock_ticker}. Proceeding with web analysis only.")
 
-            base_results["market_outlook"] = research_agent.generate_market_outlook(company_name, stock_ticker)
-            base_results["value_analysis"] = research_agent.generate_value_analysis(company_name, stock_ticker)
-            base_results["devils_advocate"] = research_agent.generate_devils_advocate_view(company_name, stock_ticker)
+            base_results["market_outlook"] = research_agent.generate_market_outlook(company_name, stock_ticker, financial_data_result=financial_data_str)  # [FIXED] đồng bộ số liệu UI <-> AI
+            base_results["value_analysis"] = research_agent.generate_value_analysis(company_name, stock_ticker, financial_data_result=financial_data_str)  # [FIXED]
+            base_results["devils_advocate"] = research_agent.generate_devils_advocate_view(company_name, stock_ticker, financial_data_result=financial_data_str)  # [FIXED]
             base_results["final_summary"] = research_agent.generate_final_summary(
                 company_name,
                 base_results["market_outlook"].get('answer', ''),
@@ -171,11 +181,14 @@ if st.session_state.current_analysis_index is not None:
     st.subheader("Key Financial Data")
     financial_data_raw = res.get("financial_data", "")
     financials = parse_financial_data(financial_data_raw)
-    if financials and financials.get("Current Price") != "N/A":
+    # [FIXED] Đọc Currency đã parse để chọn tiền tố hiển thị
+    currency_prefix = get_currency_prefix(financials.get("Currency"))
+    # [FIXED] Điều kiện hiển thị dựa trên giá khả dụng (Current Price hoặc Previous Close), khớp với price_val bên dưới
+    price_val = get_first_available_value(financials, ["Current Price", "Previous Close"])
+    if financials and price_val != "N/A":
         cols = st.columns(4)
-        price_val = get_first_available_value(financials, ["Current Price", "Previous Close"])
-        cols[0].metric(label="Current Price", value=f"${float(price_val):.2f}" if price_val != "N/A" else "N/A")
-        cols[1].metric(label="Market Cap", value=format_large_number(financials.get("Market Cap")))
+        cols[0].metric(label="Current Price", value=f"{currency_prefix}{float(price_val):.2f}")  # [FIXED]
+        cols[1].metric(label="Market Cap", value=format_large_number(financials.get("Market Cap"), currency_prefix))  # [FIXED]
         cols[2].metric(label="P/E Ratio", value=f"{float(financials.get('Trailing P/E')):.2f}" if financials.get('Trailing P/E') not in [None, "N/A"] else "N/A")
         cols[3].metric(label="EPS", value=f"{float(financials.get('Trailing EPS')):.2f}" if financials.get('Trailing EPS') not in [None, "N/A"] else "N/A")
     else:
